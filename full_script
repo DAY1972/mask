@@ -1,0 +1,352 @@
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import json
+import base64
+import cv2
+import matplotlib.pyplot as plt
+from PIL import Image, ImageDraw
+import pathlib
+import pickle
+import os
+
+def decode_image(encoded_image):
+        bytearray_ = np.asarray(bytearray(base64.b64decode(encoded_image)),
+                                dtype=np.uint8)
+        return cv2.imdecode(bytearray_,
+                            cv2.IMREAD_COLOR).astype(np.uint8)
+
+def image_sample(data):
+        image = decode_image(data['imageData'])
+        return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+
+def image_mask(data):
+        im = image_sample(data)
+        image_mask = Image.new('RGB', (im.shape[1], im.shape[0]), (0, 0, 0))
+        draw = ImageDraw.Draw(image_mask)
+        for shape in data['shapes']:
+                if shape['label'] == 'wall':
+                        if shape['shape_type'] == 'rectangle':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.rectangle(xy, fill=(1, 0 , 0),
+                                               outline=(1, 0, 0))
+                        elif shape['shape_type'] == 'polygon':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.polygon(xy, fill=(1, 0 , 0),
+                                             outline=(1, 0, 0))
+                        elif shape['shape_type'] == 'circle':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.ellipse(xy, fill=(1, 0 , 0),
+                                             outline=(1, 0, 0))
+                elif shape['label'] == 'window':
+                        if shape['shape_type'] == 'rectangle':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.rectangle(xy, fill=(2, 0, 0),
+                                               outline=(2, 0, 0))
+                        elif shape['shape_type'] == 'polygon':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.polygon(xy, fill=(2, 0, 0),
+                                             outline=(2, 0, 0))
+                        elif shape['shape_type'] == 'circle':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.ellipse(xy, fill=(2, 0, 0),
+                                             outline=(2, 0, 0))
+                elif shape['label'] == 'door':
+                        if shape['shape_type'] == 'rectangle':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.rectangle(xy, fill=(3, 0, 0),
+                                               outline=(3, 0, 0))
+                        elif shape['shape_type'] == 'circle':
+                                xy = []
+                                for lis in shape['points']:
+                                        xy.append(tuple(lis))
+                                draw.ellipse(xy, fill=(3, 0, 0),
+                                             outline=(3, 0, 0))
+                        elif shape['shape_type'] == 'polygon':
+                                x = []
+                                y = []
+                                for lis in shape['points']:
+                                        x.append(lis[0])
+                                        y.append(lis[1])
+                                x = np.array(x)
+                                y = np.array(y)
+                                x_min = x.min()
+                                x_max = x.max()
+                                y_min = y.min()
+                                y_max = y.max()
+                                draw.rectangle(((x_min, y_min),
+                                                (x_max, y_max)),
+                                               fill=(3, 0, 0),
+                                               outline=(3, 0, 0))
+        return np.asarray(image_mask)[:, :, 0]
+
+def info_df(list_of_json_files):
+        wall = []
+        window = []
+        door = []
+        file_name = []
+        linestrip = []
+        circle = []
+        shape_the_same = []
+        for json_files in list_of_json_files:
+                with open(json_files, "r") as read_file:
+                        data = json.load(read_file)
+                image = image_sample(data)
+                if data['imageHeight'] == image.shape[0]\
+                   and data['imageWidth'] == image.shape[1]:
+                        shape_the_same.append(True)
+                else:
+                        shape_the_same.append(False)
+                file_name.append(json_files)
+                linestrip_ = 0
+                circle_ = 0
+                wall_ = 0
+                window_ = 0
+                door_ = 0
+                for shape in data['shapes']:
+                        if shape['label'] == 'wall':
+                                wall_ += 1
+                        elif shape['label'] == 'window':
+                                window_ += 1
+                        elif shape['label'] == 'door':
+                                door_ += 1
+                        if shape['shape_type'] == 'linestrip':
+                                linestrip_ += 1
+                        elif shape['shape_type'] == 'circle':
+                                circle_ += 1
+                wall.append(wall_)
+                window.append(window_)
+                door.append(door_)
+                linestrip.append(linestrip_)
+                circle.append(circle_)
+        dictionary = {'file_name':file_name, 'wall_amount':wall,
+                      'window_amount':window, 'door_amount':door,
+                      'linestrip_amount':linestrip, 'circle_amount':circle}
+        info_df = pd.DataFrame(dictionary)
+        info_df['has_missed_shapes'] = info_df.iloc[:, 1:4].min(axis=1) == 0
+        return info_df
+
+def get_model(img_size, num_classes):
+        inputs = tf.keras.Input(shape=img_size + (1,))
+        x = tf.keras.layers.Conv2D(64, 3, strides=2, activation="relu",
+                                   padding="same")(inputs)
+        x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+        x = tf.keras.layers.Conv2D(128, 3, strides=2, activation="relu",
+                                   padding="same")(x)
+        x = tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same")(x)
+        x = tf.keras.layers.Conv2D(256, 3, strides=2, padding="same",
+                                   activation="relu")(x)
+        x = tf.keras.layers.Conv2D(256, 3, activation="relu", padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(256, 3, activation="relu",
+                                            padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(256, 3, activation="relu",
+                                            padding="same", strides=2)(x)
+        x = tf.keras.layers.Conv2DTranspose(128, 3, activation="relu",
+                                            padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(128, 3, activation="relu",
+                                            padding="same", strides=2)(x)
+        x = tf.keras.layers.Conv2DTranspose(64, 3, activation="relu",
+                                            padding="same")(x)
+        x = tf.keras.layers.Conv2DTranspose(64, 3, activation="relu",
+                                            padding="same", strides=2)(x)
+        outputs = tf.keras.layers.Conv2D(num_classes, 3, activation="softmax",
+                                         padding="same")(x)
+        model = tf.keras.Model(inputs, outputs)
+        return model
+
+def path_to_input_image(path):
+        img = tf.keras.utils.img_to_array\
+              (tf.keras.utils.load_img(path, target_size=None,
+                                       color_mode='grayscale'))
+        return img
+
+def path_to_target(path):
+        img = tf.keras.utils.img_to_array(tf.keras.utils.load_img\
+                                          (path, target_size=None,
+                                           color_mode="grayscale"))
+        img = img.astype("uint8")
+        return img
+
+def make_augmented_train_data_1():
+        j = 0
+        for json_files in info_df_train['file_name']:
+                with open(json_files, "r") as read_file:
+                        data = json.load(read_file)
+                im_mask = image_mask(data)
+                im_sample = image_sample(data)
+                image = np.zeros(shape=(200, 200), dtype='uint8')
+                mask = np.zeros(shape=(200, 200), dtype='uint8')
+                if im_sample.shape[0] >= 200 and im_sample.shape[1] >= 200:
+                        for h in range(200, im_sample.shape[0], 200):
+                                for w in range(200, im_sample.shape[1], 200):
+                                        image[:,:] = im_sample[h-200:h, w-200:w]
+                                        mask = im_mask[h-200:h, w-200:w]
+                                        image_to_save = Image.fromarray(image, 'L')
+                                        mask_to_save = Image.fromarray(mask, 'L')
+                                        path_to_save_images = f'C:\\Users\Dima\\Desktop\\Krim\\my_train_images\\{j}.png'
+                                        path_to_save_masks = f'C:\\Users\\Dima\\Desktop\\Krim\\my_train_masks\\{j}.png'
+                                        image_to_save.save(path_to_save_images)
+                                        mask_to_save.save(path_to_save_masks)
+                                        j += 1
+
+def make_augmented_validation_data_1():
+        j = 0
+        for json_files in info_df_validation['file_name']:
+                with open(json_files, "r") as read_file:
+                        data = json.load(read_file)
+                im_mask = image_mask(data)
+                im_sample = image_sample(data)
+                image = np.zeros(shape=(200, 200), dtype='uint8')
+                mask = np.zeros(shape=(200, 200), dtype='uint8')
+                if im_sample.shape[0] >= 200 and im_sample.shape[1] >= 200:
+                        for h in range(200, im_sample.shape[0], 200):
+                                for w in range(200, im_sample.shape[1], 200):
+                                        image[:,:] = im_sample[h-200:h, w-200:w]
+                                        mask = im_mask[h-200:h, w-200:w]
+                                        image_to_save = Image.fromarray(image, 'L')
+                                        mask_to_save = Image.fromarray(mask, 'L')
+                                        path_to_save_images = f'C:\\Users\Dima\\Desktop\\Krim\\my_validation_images\\{j}.png'
+                                        path_to_save_masks = f'C:\\Users\\Dima\\Desktop\\Krim\\my_validation_masks\\{j}.png'
+                                        image_to_save.save(path_to_save_images)
+                                        mask_to_save.save(path_to_save_masks)
+                                        j += 1
+
+# создание файлов для обучения
+json_dir = pathlib.Path(r'train\object_detection')
+pattern = '*.json'
+list_of_json_files = json_dir.glob(pattern)
+info_df = info_df(list_of_json_files)
+info_df = info_df.sample(frac=1, random_state=100)
+info_df_train = info_df[info_df['has_missed_shapes'] == False].copy()
+info_df_validation = info_df[info_df['has_missed_shapes'] == True].copy()
+info_df_validation.drop(labels=info_df_validation.index[518], inplace=True)
+make_augmented_train_data_1()
+make_augmented_validation_data_1()
+
+# обучение модели
+
+image_train_dir = 'my_train_images/'
+input_train_imgage_paths = sorted([os.path.join(image_train_dir, file_name)
+                                for file_name in os.listdir(image_train_dir)
+                                if file_name.endswith(".png")])
+
+mask_train_dir = 'my_train_masks/'
+input_train_mask_paths = sorted([os.path.join(mask_train_dir, file_name)
+                                for file_name in os.listdir(mask_train_dir)
+                                if file_name.endswith(".png")])
+
+image_validation_dir = 'my_validation_images/'
+input_validation_imgage_paths = sorted([os.path.join(image_validation_dir, file_name)
+                                for file_name in os.listdir(image_validation_dir)
+                                if file_name.endswith(".png")])
+
+mask_validation_dir = 'my_validation_masks/'
+input_validation_mask_paths = sorted([os.path.join(mask_validation_dir, file_name)
+                                for file_name in os.listdir(mask_validation_dir)
+                                if file_name.endswith(".png")])
+
+
+num_valid_imgs = len(input_validation_imgage_paths)
+num_test_imgs = len(input_test_imgage_paths)
+
+input_imgs = np.zeros((10000,) + img_size + (1,), dtype="float32")
+targets = np.zeros((10000,) + img_size + (1,), dtype="uint8")
+
+for i in range(10000):
+        input_imgs[i] = path_to_input_image(input_train_imgage_paths[i])
+        targets[i] = path_to_target(input_train_mask_paths[i])
+input_imgs = (input_imgs - input_imgs.min())
+input_imgs =  input_imgs / input_imgs.max()
+
+valid_imgs = np.zeros((num_valid_imgs,) + img_size + (1,), dtype="float32")
+valid_targets = np.zeros((num_valid_imgs,) + img_size + (1,), dtype="uint8")
+
+for i in range(num_valid_imgs):
+        valid_imgs[i] = path_to_input_image(input_validation_imgage_paths[i])
+        valid_targets[i] = path_to_target(input_validation_mask_paths[i])
+valid_imgs = valid_imgs - valid_imgs.min()
+valid_imgs = valid_imgs / valid_imgs.max()
+
+model = get_model(img_size=(200, 200), num_classes=4)
+model.summary()
+model.compile(optimizer="rmsprop", loss="sparse_categorical_crossentropy")
+
+callbacks = [tf.keras.callbacks.ModelCheckpoint("image_segmentation.keras",
+                                                save_best_only=True)]
+history = model.fit(input_imgs, targets, epochs=10,
+                    callbacks=callbacks, batch_size=64, verbose=1,
+                    validation_data=(valid_imgs, valid_targets))
+
+epochs = range(1, len(history.history["loss"]) + 1)
+loss = history.history["loss"]
+val_loss = history.history["val_loss"]
+plt.figure()
+plt.plot(epochs, loss, "bo", label="Training loss")
+plt.plot(epochs, val_loss, "b", label="Validation loss")
+plt.title("Training and validation loss")
+plt.legend()
+plt.show()
+
+# предсказание по тестовым изображениям
+image_test_dir = 'test/'
+input_test_imgage_paths = sorted([os.path.join(image_test_dir, file_name)
+                                  for file_name in os.listdir(image_test_dir)
+                                  if file_name.endswith(".png")])
+num_test_imgs = len(input_test_imgage_paths)
+img_size = (200, 200)
+
+model = tf.keras.models.load_model("image_segmentation.keras")
+
+for i in range(num_test_imgs):
+        v = input_test_imgage_paths[i].split('/')[-1]
+        tests = path_to_input_image(input_test_imgage_paths[i])
+        tests = tests - tests.min()
+        tests = tests / tests.max()
+        if tests.shape[0] % 200:
+                IM_H = (tests.shape[0] // 200) + 1
+        else:
+                IM_H = tests.shape[0] // 200
+                
+        if tests.shape[1] % 200:
+                IM_W = tests.shape[1] // 200 + 1
+        else:
+                IM_W = tests.shape[1] // 200
+        tests_zeros = np.zeros((200 * IM_H, 200 * IM_W) + (1,),
+                               dtype="float32") + 1.0
+        tests_zeros[:tests.shape[0], :tests.shape[1], :] = tests
+        tests_aray = np.zeros((IM_H * IM_W,) + img_size + (1,), dtype="float32")
+# разбираем тестовое изображение на куски 200 х 200
+        count = 0
+        for h in range(IM_H):
+                for w in range(IM_W):
+                        tests_aray[count, :, :, :] = tests_zeros[h*200:(h+1)*200,
+                                                                w*200:(w+1)*200]
+                        count += 1
+        masks = model.predict(tests_aray)
+        solution = np.zeros((tests.shape[0], tests.shape[1]), dtype="uint8")
+        im = np.zeros((200 * IM_H, 200 * IM_W), dtype="uint8")
+# собираем маску из кусков 200 х 200
+        count = 0
+        for h in range(IM_H):
+                for w in range(IM_W):
+                        im[h*200:(h+1)*200, w*200:(w+1)*200] =\
+                                            np.argmax(masks[count], axis=2)
+                        count += 1
+        solution = im[: tests.shape[0], : tests.shape[1]]
+        im_save = Image.fromarray(solution, mode='L')
+        path_to_save_images = f'my_solution\\{v}'
+        im_save.save(path_to_save_images, format='png', optimize=True)
