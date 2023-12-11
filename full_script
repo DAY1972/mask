@@ -2,7 +2,7 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 import json
-import base64
+import base64 # module provides functions for encoding binary data to printable ASCII characters
 import cv2
 import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw
@@ -11,12 +11,14 @@ import pickle
 import os
 
 def decode_image(encoded_image):
+        """декодеровка информации о планах помещений"""
         bytearray_ = np.asarray(bytearray(base64.b64decode(encoded_image)),
                                 dtype=np.uint8)
         return cv2.imdecode(bytearray_,
                             cv2.IMREAD_COLOR).astype(np.uint8)
 
 def image_sample(data):
+        """возвращает план помещения"""
         image = decode_image(data['imageData'])
         return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
@@ -95,6 +97,7 @@ def image_mask(data):
         return np.asarray(image_mask)[:, :, 0]
 
 def info_df(list_of_json_files):
+        """прорисовывает """
         wall = []
         window = []
         door = []
@@ -141,6 +144,7 @@ def info_df(list_of_json_files):
         return info_df
 
 def get_model(img_size, num_classes):
+        """model construction transformer encoder - decoder"""
         inputs = tf.keras.Input(shape=img_size + (1,))
         x = tf.keras.layers.Conv2D(64, 3, strides=2, activation="relu",
                                    padding="same")(inputs)
